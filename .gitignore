@@ -1,3 +1,5 @@
 /target/
+spacetimedb/target/
 **/*.rs.bk
 Cargo.lock
+.vscode/

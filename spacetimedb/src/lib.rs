@@ -54,7 +54,7 @@ pub fn move_player(ctx: &ReducerContext, new_x: f32, new_y: f32) {
     let player_identity = ctx.sender;
 
     // .identity() works here because the field is marked #[unique] above.
-    if let Some(player) = ctx.db.player().identity().find(&player_identity) {
+    if let Some(player) = ctx.db.player().identity().find(player_identity) {
         ctx.db.player().id().update(Player {
             position_x: new_x,
             position_y: new_y,
