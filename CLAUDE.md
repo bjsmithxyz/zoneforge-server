@@ -768,3 +768,16 @@ spacetime logs <module-name>
 12. **DO NOT edit generated bindings** — regenerate with `spacetime generate`
 13. **Identity to String needs `.to_string()`** — `identity.to_hex().to_string()`
 14. **Client SDK is blocking** — use `spawn_blocking` or dedicated thread if mixing with async runtimes
+
+---
+
+## Claude Skills
+
+Two skills apply when working in this submodule:
+
+| Skill | Triggers on |
+| ----- | ----------- |
+| `spacetimedb-rust-table` | add table, define schema, new entity, store data |
+| `spacetimedb-rust-reducer` | add reducer, server action, handle player event |
+
+Claude loads these automatically. For the full deploy pipeline (build → publish → generate bindings) use the `zoneforge-deploy` skill from the umbrella repo root.
