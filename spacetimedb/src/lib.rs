@@ -3,7 +3,7 @@ use spacetimedb::{table, reducer, ReducerContext, Identity, Table};
 // Define a simple Player table.
 // Note: #[table(...)] is the table attribute — do NOT also add #[derive(SpacetimeType)].
 // SpacetimeType is only for custom embedded types used as fields inside table rows.
-#[table(name = player, public)]
+#[table(accessor = player, public)]
 pub struct Player {
     #[primary_key]
     #[auto_inc]
@@ -20,7 +20,7 @@ pub struct Player {
 }
 
 // Define a Zone table
-#[table(name = zone, public)]
+#[table(accessor = zone, public)]
 pub struct Zone {
     #[primary_key]
     #[auto_inc]
@@ -35,7 +35,7 @@ pub struct Zone {
 pub fn create_player(ctx: &ReducerContext, name: String) {
     let player = Player {
         id: 0, // auto_inc will assign
-        identity: ctx.sender,
+        identity: ctx.sender(),
         name,
         zone_id: 1, // Default starting zone
         position_x: 0.0,
@@ -45,13 +45,13 @@ pub fn create_player(ctx: &ReducerContext, name: String) {
     };
 
     ctx.db.player().insert(player);
-    log::info!("Player created: {}", ctx.sender);
+    log::info!("Player created: {}", ctx.sender());
 }
 
 // Reducer to move a player
 #[reducer]
 pub fn move_player(ctx: &ReducerContext, new_x: f32, new_y: f32) {
-    let player_identity = ctx.sender;
+    let player_identity = ctx.sender();
 
     // .identity() works here because the field is marked #[unique] above.
     if let Some(player) = ctx.db.player().identity().find(player_identity) {
@@ -76,4 +76,43 @@ pub fn create_zone(ctx: &ReducerContext, name: String, width: u32, height: u32) 
 
     ctx.db.zone().insert(zone);
     log::info!("Zone created: {}", name);
+}
+
+// Define an EntityInstance table — tracks placed objects within a zone
+#[table(accessor = entity_instance, public)]
+pub struct EntityInstance {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub zone_id: u64,
+    pub prefab_name: String,
+    pub position_x: f32,
+    pub position_y: f32,
+    pub entity_type: String,
+}
+
+// Reducer to spawn an entity in a zone
+#[reducer]
+pub fn spawn_entity(
+    ctx: &ReducerContext,
+    zone_id: u64,
+    prefab_name: String,
+    x: f32,
+    y: f32,
+    entity_type: String,
+) -> Result<(), String> {
+    if prefab_name.is_empty() {
+        return Err("prefab_name cannot be empty".to_string());
+    }
+
+    ctx.db.entity_instance().insert(EntityInstance {
+        id: 0, // auto_inc
+        zone_id,
+        prefab_name: prefab_name.clone(),
+        position_x: x,
+        position_y: y,
+        entity_type,
+    });
+    log::info!("Entity '{}' spawned in zone {}", prefab_name, zone_id);
+    Ok(())
 }

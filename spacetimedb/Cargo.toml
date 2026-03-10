@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-spacetimedb = "1.0"
+spacetimedb = "2.0"
 log = "0.4"
 
 [profile.release]
