@@ -1,21 +1,22 @@
 # ZoneForge Server
 
-SpacetimeDB Rust server module for ZoneForge — a tile-based multiplayer world builder. Defines the database schema, game state tables, and server-authoritative reducers.
+SpacetimeDB Rust server module for ZoneForge — a 3D multiplayer RPG world builder. Defines the database schema, game state tables, and server-authoritative reducers.
 
 ## Stack
 
-- **Language**: Rust
-- **Platform**: SpacetimeDB 1.x (resolved: 1.12.0)
+- **Language**: Rust (compiled to WASM)
+- **Platform**: SpacetimeDB 2.x
 - **Build target**: `wasm32-unknown-unknown`
 
 ## Project Structure
 
 ```
-spacetimedb/
-├── src/
-│   └── lib.rs      # Tables and reducers
-└── Cargo.toml
-spacetime.json       # SpacetimeDB project config
+server/
+├── spacetime.json         # SpacetimeDB project config (module-path → ./spacetimedb)
+└── spacetimedb/
+    ├── src/
+    │   └── lib.rs         # All tables and reducers
+    └── Cargo.toml         # spacetimedb = "2.0", crate-type = ["cdylib"]
 ```
 
 ## Prerequisites
@@ -39,14 +40,14 @@ curl -fsSL https://install.spacetimedb.com | bash
 # Start the local SpacetimeDB server
 spacetime start
 
-# Build the module
-spacetime build --project-path spacetimedb
+# Build the module (run from server/)
+spacetime build
 
 # Publish to local server
-spacetime publish zoneforge-server --project-path spacetimedb
+spacetime publish --server local zoneforge-server
 
-# Republish after a breaking schema change (clears all data)
-spacetime publish zoneforge-server --project-path spacetimedb --clear-database -y
+# Republish after a breaking schema change (wipes all data)
+spacetime publish --server local zoneforge-server --delete-data
 
 # View server logs
 spacetime logs zoneforge-server
@@ -54,7 +55,7 @@ spacetime logs zoneforge-server
 
 ## Generating Client Bindings
 
-Run from the Unity client project root:
+Run from the Unity client or editor project directory:
 
 ```bash
 spacetime generate --lang csharp \
@@ -68,6 +69,7 @@ spacetime generate --lang csharp \
 |-------|-------------|
 | `player` | Connected players with position, health, and zone |
 | `zone` | Zone definitions with grid dimensions |
+| `entity_instance` | Entities placed in zones (props, NPCs, enemies) |
 
 ## Reducers
 
@@ -76,8 +78,10 @@ spacetime generate --lang csharp \
 | `create_player` | Register a new player on connect |
 | `move_player` | Update player position (server-authoritative) |
 | `create_zone` | Create a new named zone |
+| `spawn_entity` | Place an entity in a zone |
 
 ## Related
 
 - [zoneforge-client](https://github.com/bjsmithxyz/zoneforge-client) — Unity game client
+- [zoneforge-editor](https://github.com/bjsmithxyz/zoneforge-editor) — Standalone world editor
 - [zoneforge](https://github.com/bjsmithxyz/zoneforge) — Umbrella repo and documentation
