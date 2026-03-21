@@ -48,17 +48,21 @@ pub struct TerrainChunk {
 // Reducer to create a new player
 #[reducer]
 pub fn create_player(ctx: &ReducerContext, name: String) {
+    // Idempotent: skip if this identity already has a player row
+    if ctx.db.player().identity().find(ctx.sender()).is_some() {
+        log::info!("create_player: identity already exists, skipping");
+        return;
+    }
     let player = Player {
-        id: 0, // auto_inc will assign
+        id: 0,
         identity: ctx.sender(),
         name,
-        zone_id: 1, // Default starting zone
+        zone_id: 1,
         position_x: 0.0,
         position_y: 0.0,
         health: 100,
         max_health: 100,
     };
-
     ctx.db.player().insert(player);
     log::info!("Player created: {}", ctx.sender());
 }
