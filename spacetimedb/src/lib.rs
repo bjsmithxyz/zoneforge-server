@@ -69,18 +69,23 @@ pub fn create_player(ctx: &ReducerContext, name: String) {
 
 // Reducer to move a player
 #[reducer]
-pub fn move_player(ctx: &ReducerContext, new_x: f32, new_y: f32) {
-    let player_identity = ctx.sender();
+pub fn move_player(ctx: &ReducerContext, new_x: f32, new_y: f32) -> Result<(), String> {
+    let player = ctx.db.player().identity().find(ctx.sender())
+        .ok_or_else(|| "Player not found".to_string())?;
 
-    // .identity() works here because the field is marked #[unique] above.
-    if let Some(player) = ctx.db.player().identity().find(player_identity) {
-        ctx.db.player().id().update(Player {
-            position_x: new_x,
-            position_y: new_y,
-            ..player
-        });
-        log::info!("Player moved to ({}, {})", new_x, new_y);
-    }
+    let zone = ctx.db.zone().id().find(&player.zone_id)
+        .ok_or_else(|| "Zone not found".to_string())?;
+
+    let clamped_x = new_x.clamp(0.0, zone.terrain_width as f32);
+    let clamped_y = new_y.clamp(0.0, zone.terrain_height as f32);
+
+    ctx.db.player().id().update(Player {
+        position_x: clamped_x,
+        position_y: clamped_y,
+        ..player
+    });
+    log::info!("Player moved to ({}, {})", clamped_x, clamped_y);
+    Ok(())
 }
 
 const CHUNK_SIZE: u32 = 32;
