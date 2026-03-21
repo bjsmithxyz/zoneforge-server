@@ -76,8 +76,19 @@ pub fn move_player(ctx: &ReducerContext, new_x: f32, new_y: f32) -> Result<(), S
     let zone = ctx.db.zone().id().find(&player.zone_id)
         .ok_or_else(|| "Zone not found".to_string())?;
 
+    if !new_x.is_finite() || !new_y.is_finite() {
+        return Err(format!("Invalid position ({}, {})", new_x, new_y));
+    }
+
     let clamped_x = new_x.clamp(0.0, zone.terrain_width as f32);
     let clamped_y = new_y.clamp(0.0, zone.terrain_height as f32);
+
+    if clamped_x != new_x || clamped_y != new_y {
+        log::warn!(
+            "move_player: position ({}, {}) clamped to ({}, {})",
+            new_x, new_y, clamped_x, clamped_y
+        );
+    }
 
     ctx.db.player().id().update(Player {
         position_x: clamped_x,
