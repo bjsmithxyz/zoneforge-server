@@ -50,7 +50,7 @@ pub struct TerrainChunk {
 pub fn create_player(ctx: &ReducerContext, name: String) {
     // Idempotent: skip if this identity already has a player row
     if ctx.db.player().identity().find(ctx.sender()).is_some() {
-        log::info!("create_player: identity already exists, skipping");
+        log::info!("create_player: identity {} already exists, skipping", ctx.sender());
         return;
     }
     let player = Player {
