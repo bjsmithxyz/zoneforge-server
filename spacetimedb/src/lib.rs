@@ -128,6 +128,93 @@ pub fn tick_status_effects(_ctx: &ReducerContext, _tick: StatusEffectTick) {
     // TODO(Task 5): apply damage-over-time for each active StatusEffect
 }
 
+#[reducer(init)]
+pub fn init(ctx: &ReducerContext) {
+    // Seed starter abilities if table is empty
+    if ctx.db.ability().iter().next().is_none() {
+        ctx.db.ability().insert(Ability {
+            id: 0,
+            name: "Auto-Attack".to_string(),
+            damage: 20,
+            cooldown_ms: 500,
+            mana_cost: 0,
+            range: 2.5,
+            ability_type: AbilityType::MeleeAttack,
+        });
+        ctx.db.ability().insert(Ability {
+            id: 0,
+            name: "Fireball".to_string(),
+            damage: 50,
+            cooldown_ms: 3000,
+            mana_cost: 20,
+            range: 15.0,
+            ability_type: AbilityType::Projectile,
+        });
+        ctx.db.ability().insert(Ability {
+            id: 0,
+            name: "Heal".to_string(),
+            damage: -50,
+            cooldown_ms: 10000,
+            mana_cost: 30,
+            range: 0.0,
+            ability_type: AbilityType::SelfCast,
+        });
+        log::info!("init: seeded 3 abilities");
+    }
+
+    // Start the recurring status effect tick if not already scheduled
+    if ctx.db.status_effect_tick().iter().next().is_none() {
+        ctx.db.status_effect_tick().insert(StatusEffectTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_secs(1)
+            ),
+        });
+        log::info!("init: scheduled status effect tick");
+    }
+}
+
+fn apply_damage(
+    ctx: &ReducerContext,
+    target_id: u64,
+    attacker_id: u64,
+    ability_id: u64,
+    amount: i32,
+) {
+    let Some(target) = ctx.db.player().id().find(&target_id) else {
+        return;
+    };
+
+    let new_health = (target.health - amount).clamp(0, target.max_health);
+    let overkill = if amount > 0 && amount > target.health {
+        amount - target.health
+    } else {
+        0
+    };
+    let new_is_dead = (new_health == 0 && amount > 0) || target.is_dead;
+
+    ctx.db.player().id().update(Player {
+        health: new_health,
+        is_dead: new_is_dead,
+        ..target
+    });
+
+    ctx.db.combat_log().insert(CombatLog {
+        id: 0,
+        timestamp: ctx.timestamp,
+        attacker_id,
+        target_id,
+        ability_id,
+        damage_dealt: amount,
+        overkill,
+    });
+
+    log::info!(
+        "apply_damage: target={} amount={} new_health={} dead={}",
+        target_id, amount, new_health, new_is_dead
+    );
+}
+
 // Reducer to create a new player
 #[reducer]
 pub fn create_player(ctx: &ReducerContext, name: String) {
