@@ -145,6 +145,7 @@ pub fn tick_status_effects(ctx: &ReducerContext, _tick: StatusEffectTick) {
             // Active DoT — apply tick damage (ability_id 0 = DoT, no ability row)
             apply_damage(ctx, effect.target_id, effect.target_id, 0, effect.damage_per_tick);
         }
+        // Freeze/Stun: no damage tick — effect persists until expired (handled by expiry branch above)
     }
 
     // Re-schedule for next tick (self-recurring pattern)
