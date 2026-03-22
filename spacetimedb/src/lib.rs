@@ -63,6 +63,69 @@ pub struct TerrainChunk {
     pub splat_data:  Vec<u8>,  // 32×32 × 4 u8 = 4096 bytes
 }
 
+#[table(accessor = ability, public)]
+pub struct Ability {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub name: String,
+    pub damage: i32,
+    pub cooldown_ms: u64,
+    pub mana_cost: i32,
+    pub range: f32,
+    pub ability_type: AbilityType,
+}
+
+#[table(accessor = player_cooldown, public)]
+pub struct PlayerCooldown {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub player_id: u64,
+    pub ability_id: u64,
+    pub ready_at: Timestamp,
+}
+
+#[table(accessor = status_effect, public)]
+pub struct StatusEffect {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub target_id: u64,
+    pub effect_type: StatusEffectType,
+    pub expires_at: Timestamp,
+    pub damage_per_tick: i32,
+}
+
+#[table(accessor = combat_log, public)]
+pub struct CombatLog {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub timestamp: Timestamp,
+    pub attacker_id: u64,
+    pub target_id: u64,
+    pub ability_id: u64,
+    pub damage_dealt: i32,
+    pub overkill: i32,
+}
+
+#[table(accessor = status_effect_tick, scheduled(tick_status_effects))]
+pub struct StatusEffectTick {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+// Stub reducer for DoT tick scheduling — full implementation in Task 5
+#[reducer]
+pub fn tick_status_effects(_ctx: &ReducerContext, _tick: StatusEffectTick) {
+    // TODO(Task 5): apply damage-over-time for each active StatusEffect
+}
+
 // Reducer to create a new player
 #[reducer]
 pub fn create_player(ctx: &ReducerContext, name: String) {
