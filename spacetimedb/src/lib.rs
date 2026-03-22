@@ -184,6 +184,10 @@ fn apply_damage(
     let Some(target) = ctx.db.player().id().find(&target_id) else {
         return;
     };
+    // Skip if target is already dead (prevents DoT ticks from writing spurious log rows)
+    if target.is_dead {
+        return;
+    }
 
     let new_health = (target.health - amount).clamp(0, target.max_health);
     let overkill = if amount > 0 && amount > target.health {
