@@ -249,7 +249,7 @@ pub fn use_ability(
             return Err("Target is already dead".to_string());
         }
 
-        // 5. Range check (XZ distance)
+        // 5. Range check (XZ distance); position_y is the horizontal Z axis (no position_z field)
         let dx = player.position_x - target.position_x;
         let dz = player.position_y - target.position_y;
         let dist_sq = dx * dx + dz * dz;
@@ -315,7 +315,7 @@ pub fn use_ability(
         });
     }
 
-    // Apply effect
+    // Apply effect — negative damage = heal (see apply_damage for how negative amount is handled)
     apply_damage(ctx, target_id, player_id, ability_id, ability.damage);
 
     log::info!(
