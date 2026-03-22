@@ -122,10 +122,38 @@ pub struct StatusEffectTick {
     pub scheduled_at: ScheduleAt,
 }
 
-// Stub reducer for DoT tick scheduling — full implementation in Task 5
 #[reducer]
-pub fn tick_status_effects(_ctx: &ReducerContext, _tick: StatusEffectTick) {
-    // TODO(Task 5): apply damage-over-time for each active StatusEffect
+pub fn tick_status_effects(ctx: &ReducerContext, _tick: StatusEffectTick) {
+    let now_us = ctx.timestamp
+        .to_duration_since_unix_epoch()
+        .unwrap_or_default()
+        .as_micros();
+
+    // Collect all current effects (avoid borrow issues while deleting)
+    let all_effects: Vec<StatusEffect> = ctx.db.status_effect().iter().collect();
+
+    for effect in all_effects {
+        let expires_us = effect.expires_at
+            .to_duration_since_unix_epoch()
+            .unwrap_or_default()
+            .as_micros();
+
+        if expires_us <= now_us {
+            // Expired — remove it
+            ctx.db.status_effect().id().delete(&effect.id);
+        } else if matches!(effect.effect_type, StatusEffectType::Burn | StatusEffectType::Poison) {
+            // Active DoT — apply tick damage (ability_id 0 = DoT, no ability row)
+            apply_damage(ctx, effect.target_id, effect.target_id, 0, effect.damage_per_tick);
+        }
+    }
+
+    // Re-schedule for next tick (self-recurring pattern)
+    ctx.db.status_effect_tick().insert(StatusEffectTick {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(
+            ctx.timestamp + std::time::Duration::from_secs(1)
+        ),
+    });
 }
 
 #[reducer(init)]
@@ -322,6 +350,45 @@ pub fn use_ability(
         "use_ability: player={} ability={} target={}",
         player_id, ability_id, target_id
     );
+    Ok(())
+}
+
+#[reducer]
+pub fn respawn(ctx: &ReducerContext) -> Result<(), String> {
+    let player = ctx.db.player().identity().find(ctx.sender())
+        .ok_or("Player not found")?;
+    if !player.is_dead {
+        return Err("Player is not dead".to_string());
+    }
+
+    let zone = ctx.db.zone().id().find(&player.zone_id)
+        .ok_or("Zone not found")?;
+
+    let spawn_x = zone.terrain_width as f32 / 2.0;
+    let spawn_y = zone.terrain_height as f32 / 2.0;
+
+    // Save player_id before player is moved into the struct update
+    let player_id = player.id;
+    ctx.db.player().id().update(Player {
+        health: player.max_health,
+        mana: player.max_mana,
+        is_dead: false,
+        position_x: spawn_x,
+        position_y: spawn_y,
+        ..player
+    });
+
+    // Remove all active status effects for this player
+    let effect_ids: Vec<u64> = ctx.db.status_effect()
+        .target_id()
+        .filter(&player_id)
+        .map(|e| e.id)
+        .collect();
+    for effect_id in effect_ids {
+        ctx.db.status_effect().id().delete(&effect_id);
+    }
+
+    log::info!("respawn: player={} at ({}, {})", player_id, spawn_x, spawn_y);
     Ok(())
 }
 
