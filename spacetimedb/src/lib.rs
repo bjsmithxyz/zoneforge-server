@@ -122,6 +122,14 @@ pub struct StatusEffectTick {
     pub scheduled_at: ScheduleAt,
 }
 
+#[table(accessor = mana_regen_tick, scheduled(tick_mana_regen))]
+pub struct ManaRegenTick {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
 #[reducer]
 pub fn tick_status_effects(ctx: &ReducerContext, _tick: StatusEffectTick) {
     let now_us = ctx.timestamp
@@ -155,6 +163,38 @@ pub fn tick_status_effects(ctx: &ReducerContext, _tick: StatusEffectTick) {
             ctx.timestamp + std::time::Duration::from_secs(1)
         ),
     });
+}
+
+#[reducer]
+pub fn tick_mana_regen(ctx: &ReducerContext, _tick: ManaRegenTick) {
+    // Restore 10 mana every 2 seconds to all living players
+    let players: Vec<Player> = ctx.db.player().iter().collect();
+    for player in players {
+        if player.is_dead || player.mana >= player.max_mana { continue; }
+        let new_mana = (player.mana + 10).min(player.max_mana);
+        ctx.db.player().id().update(Player { mana: new_mana, ..player });
+    }
+    // Re-schedule
+    ctx.db.mana_regen_tick().insert(ManaRegenTick {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(
+            ctx.timestamp + std::time::Duration::from_secs(2)
+        ),
+    });
+}
+
+/// Ensures the mana regen tick is running after a hot-publish (init only runs on fresh databases).
+#[reducer(client_connected)]
+pub fn client_connected(ctx: &ReducerContext) {
+    if ctx.db.mana_regen_tick().iter().next().is_none() {
+        ctx.db.mana_regen_tick().insert(ManaRegenTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_secs(2)
+            ),
+        });
+        log::info!("client_connected: bootstrapped mana regen tick");
+    }
 }
 
 #[reducer(init)]
@@ -200,6 +240,17 @@ pub fn init(ctx: &ReducerContext) {
             ),
         });
         log::info!("init: scheduled status effect tick");
+    }
+
+    // Start the mana regen tick
+    if ctx.db.mana_regen_tick().iter().next().is_none() {
+        ctx.db.mana_regen_tick().insert(ManaRegenTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_secs(2)
+            ),
+        });
+        log::info!("init: scheduled mana regen tick");
     }
 }
 
