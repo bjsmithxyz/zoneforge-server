@@ -219,6 +219,112 @@ fn apply_damage(
     );
 }
 
+#[reducer]
+pub fn use_ability(
+    ctx: &ReducerContext,
+    ability_id: u64,
+    target_id: u64,
+) -> Result<(), String> {
+    // 1. Caller must exist and not be dead
+    let player = ctx.db.player().identity().find(ctx.sender())
+        .ok_or("Player not found")?;
+    if player.is_dead {
+        return Err("Cannot use ability while dead".to_string());
+    }
+
+    // 2. Ability must exist
+    let ability = ctx.db.ability().id().find(&ability_id)
+        .ok_or("Ability not found")?;
+
+    // 3. Self-cast: target must be the caller
+    if ability.ability_type == AbilityType::SelfCast {
+        if target_id != player.id {
+            return Err("Self-cast ability must target self".to_string());
+        }
+    } else {
+        // 4. Target must exist and not be dead
+        let target = ctx.db.player().id().find(&target_id)
+            .ok_or("Target not found")?;
+        if target.is_dead {
+            return Err("Target is already dead".to_string());
+        }
+
+        // 5. Range check (XZ distance)
+        let dx = player.position_x - target.position_x;
+        let dz = player.position_y - target.position_y;
+        let dist_sq = dx * dx + dz * dz;
+        if dist_sq > ability.range * ability.range {
+            return Err(format!(
+                "Target out of range (dist={:.1}, range={:.1})",
+                dist_sq.sqrt(), ability.range
+            ));
+        }
+    }
+
+    // 6. Cooldown check
+    let now_us = ctx.timestamp
+        .to_duration_since_unix_epoch()
+        .unwrap_or_default()
+        .as_micros();
+    let on_cooldown = ctx.db.player_cooldown()
+        .player_id()
+        .filter(&player.id)
+        .any(|cd| {
+            if cd.ability_id != ability_id { return false; }
+            let ready_us = cd.ready_at
+                .to_duration_since_unix_epoch()
+                .unwrap_or_default()
+                .as_micros();
+            ready_us > now_us
+        });
+    if on_cooldown {
+        return Err("Ability on cooldown".to_string());
+    }
+
+    // 7. Mana check
+    if player.mana < ability.mana_cost {
+        return Err(format!(
+            "Insufficient mana ({}/{})", player.mana, ability.mana_cost
+        ));
+    }
+
+    // All checks passed — save id before player is moved into the struct update
+    let player_id = player.id;
+    let new_mana = player.mana - ability.mana_cost;
+    ctx.db.player().id().update(Player { mana: new_mana, ..player });
+    // `player` is moved above; use `player_id` from here on
+
+    // Upsert cooldown: find existing row for this player+ability, update or insert
+    let ready_at = ctx.timestamp
+        + std::time::Duration::from_millis(ability.cooldown_ms);
+    if let Some(existing_cd) = ctx.db.player_cooldown()
+        .player_id()
+        .filter(&player_id)
+        .find(|cd| cd.ability_id == ability_id)
+    {
+        ctx.db.player_cooldown().id().update(PlayerCooldown {
+            ready_at,
+            ..existing_cd
+        });
+    } else {
+        ctx.db.player_cooldown().insert(PlayerCooldown {
+            id: 0,
+            player_id,
+            ability_id,
+            ready_at,
+        });
+    }
+
+    // Apply effect
+    apply_damage(ctx, target_id, player_id, ability_id, ability.damage);
+
+    log::info!(
+        "use_ability: player={} ability={} target={}",
+        player_id, ability_id, target_id
+    );
+    Ok(())
+}
+
 // Reducer to create a new player
 #[reducer]
 pub fn create_player(ctx: &ReducerContext, name: String) {
