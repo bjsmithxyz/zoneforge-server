@@ -1,4 +1,19 @@
-use spacetimedb::{table, reducer, ReducerContext, Identity, Table};
+use spacetimedb::{table, reducer, ReducerContext, Identity, Table, SpacetimeType, Timestamp, ScheduleAt};
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum AbilityType {
+    MeleeAttack,
+    Projectile,
+    SelfCast,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum StatusEffectType {
+    Burn,
+    Freeze,
+    Stun,
+    Poison,
+}
 
 // Define a simple Player table.
 // Note: #[table(...)] is the table attribute — do NOT also add #[derive(SpacetimeType)].
@@ -17,6 +32,9 @@ pub struct Player {
     pub position_y: f32,
     pub health: i32,
     pub max_health: i32,
+    pub mana: i32,
+    pub max_mana: i32,
+    pub is_dead: bool,
 }
 
 // Define a Zone table
@@ -53,15 +71,22 @@ pub fn create_player(ctx: &ReducerContext, name: String) {
         log::info!("create_player: identity {} already exists, skipping", ctx.sender());
         return;
     }
+    let (spawn_x, spawn_y) = ctx.db.zone().id().find(&1u64)
+        .map(|z| (z.terrain_width as f32 / 2.0, z.terrain_height as f32 / 2.0))
+        .unwrap_or((32.0, 32.0));
+
     let player = Player {
         id: 0,
         identity: ctx.sender(),
         name,
         zone_id: 1,
-        position_x: 0.0,
-        position_y: 0.0,
+        position_x: spawn_x,
+        position_y: spawn_y,
         health: 100,
         max_health: 100,
+        mana: 100,
+        max_mana: 100,
+        is_dead: false,
     };
     ctx.db.player().insert(player);
     log::info!("Player created: {}", ctx.sender());
