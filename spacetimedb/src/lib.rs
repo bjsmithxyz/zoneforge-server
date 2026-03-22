@@ -76,6 +76,8 @@ pub struct Ability {
     pub ability_type: AbilityType,
 }
 
+// Surrogate id PK + btree index on player_id (no composite PK — SpacetimeDB 2.x limitation).
+// Upsert via: player_cooldown().player_id().filter(&player_id).find(|cd| cd.ability_id == ability_id)
 #[table(accessor = player_cooldown, public)]
 pub struct PlayerCooldown {
     #[primary_key]
