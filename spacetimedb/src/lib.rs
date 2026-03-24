@@ -446,6 +446,12 @@ pub fn use_ability(
     let ability = ctx.db.ability().id().find(&ability_id)
         .ok_or("Ability not found")?;
 
+    // Guard against pathological damage values that could overflow i32 arithmetic
+    const MAX_ABILITY_DAMAGE: i32 = 10_000;
+    if ability.damage.abs() > MAX_ABILITY_DAMAGE {
+        return Err(format!("Ability {} has invalid damage value {}", ability_id, ability.damage));
+    }
+
     // 3. Self-cast: target must be the caller
     if ability.ability_type == AbilityType::SelfCast {
         if target_id != player.id {
@@ -577,6 +583,11 @@ pub fn respawn(ctx: &ReducerContext) -> Result<(), String> {
 // Reducer to create a new player
 #[reducer]
 pub fn create_player(ctx: &ReducerContext, name: String) {
+    // Validate name: non-empty, max 64 chars, no null bytes
+    if name.is_empty() || name.len() > 64 || name.contains('\0') {
+        log::warn!("create_player: invalid name from {}", ctx.sender());
+        return;
+    }
     // Idempotent: skip if this identity already has a player row
     if ctx.db.player().identity().find(ctx.sender()).is_some() {
         log::info!("create_player: identity {} already exists, skipping", ctx.sender());
@@ -616,15 +627,16 @@ pub fn move_player(ctx: &ReducerContext, new_x: f32, new_y: f32) -> Result<(), S
         return Err(format!("Invalid position ({}, {})", new_x, new_y));
     }
 
-    let clamped_x = new_x.clamp(0.0, zone.terrain_width as f32);
-    let clamped_y = new_y.clamp(0.0, zone.terrain_height as f32);
-
-    if clamped_x != new_x || clamped_y != new_y {
-        log::warn!(
-            "move_player: position ({}, {}) clamped to ({}, {})",
-            new_x, new_y, clamped_x, clamped_y
-        );
+    if new_x < 0.0 || new_x > zone.terrain_width as f32
+        || new_y < 0.0 || new_y > zone.terrain_height as f32
+    {
+        return Err(format!(
+            "Position ({}, {}) out of zone bounds ({}x{})",
+            new_x, new_y, zone.terrain_width, zone.terrain_height
+        ));
     }
+    let clamped_x = new_x;
+    let clamped_y = new_y;
 
     ctx.db.player().id().update(Player {
         position_x: clamped_x,
@@ -646,6 +658,21 @@ pub fn create_zone(
     terrain_height: u32,
     water_level: f32,
 ) {
+    // Input validation
+    const MAX_TERRAIN_DIM: u32 = 512;
+    const MAX_NAME_LEN: usize = 128;
+    if name.is_empty() || name.len() > MAX_NAME_LEN || name.contains('\0') {
+        return;
+    }
+    if terrain_width == 0 || terrain_width > MAX_TERRAIN_DIM {
+        return;
+    }
+    if terrain_height == 0 || terrain_height > MAX_TERRAIN_DIM {
+        return;
+    }
+    if !water_level.is_finite() || water_level < 0.0 || water_level > terrain_height as f32 {
+        return;
+    }
     let zone = Zone {
         id: 0,
         name: name.clone(),
@@ -708,6 +735,15 @@ pub fn update_terrain_chunk(
         return Err(format!("splat_data must be 4096 bytes, got {}", splat_data.len()));
     }
 
+    // Validate height values: each group of 4 bytes is a little-endian f32.
+    // Reject NaN and Infinity which would corrupt terrain rendering.
+    for chunk in height_data.chunks_exact(4) {
+        let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        if !val.is_finite() {
+            return Err(format!("height_data contains non-finite float value: {}", val));
+        }
+    }
+
     // Verify zone + chunk bounds.
     let zone = ctx.db.zone().id().find(&zone_id)
         .ok_or_else(|| format!("Zone {} not found", zone_id))?;
@@ -759,6 +795,27 @@ pub fn spawn_entity(
 ) -> Result<(), String> {
     if prefab_name.is_empty() {
         return Err("prefab_name cannot be empty".to_string());
+    }
+
+    // Validate zone exists and position is in bounds
+    let zone = ctx.db.zone().id().find(&zone_id)
+        .ok_or_else(|| format!("Zone {} not found", zone_id))?;
+
+    if !x.is_finite() || !y.is_finite() || !elevation.is_finite() {
+        return Err("Non-finite position values".to_string());
+    }
+    if x < 0.0 || x > zone.terrain_width as f32 || y < 0.0 || y > zone.terrain_height as f32 {
+        return Err(format!(
+            "Position ({}, {}) out of zone bounds ({}x{})",
+            x, y, zone.terrain_width, zone.terrain_height
+        ));
+    }
+    const MAX_ELEVATION: f32 = 200.0;
+    if elevation < -10.0 || elevation > MAX_ELEVATION {
+        return Err(format!("Elevation {} out of range [-10, {}]", elevation, MAX_ELEVATION));
+    }
+    if prefab_name.len() > 128 || entity_type.len() > 64 {
+        return Err("prefab_name or entity_type exceeds maximum length".to_string());
     }
     ctx.db.entity_instance().insert(EntityInstance {
         id: 0,
