@@ -304,9 +304,18 @@ pub fn tick_mana_regen(ctx: &ReducerContext, _tick: ManaRegenTick) {
     });
 }
 
-/// Ensures the mana regen tick is running after a hot-publish (init only runs on fresh databases).
+/// Ensures all self-scheduling ticks are running after a hot-publish (init only runs on fresh databases).
 #[reducer(client_connected)]
 pub fn client_connected(ctx: &ReducerContext) {
+    if ctx.db.status_effect_tick().iter().next().is_none() {
+        ctx.db.status_effect_tick().insert(StatusEffectTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_secs(1)
+            ),
+        });
+        log::info!("client_connected: bootstrapped status effect tick");
+    }
     if ctx.db.mana_regen_tick().iter().next().is_none() {
         ctx.db.mana_regen_tick().insert(ManaRegenTick {
             scheduled_id: 0,
@@ -442,6 +451,7 @@ pub fn tick_ai(ctx: &ReducerContext, _tick: AiTick) {
                 } else {
                     let attack_interval_us = def.attack_speed_ms as u64 * 1000;
                     if now_us.saturating_sub(enemy.last_attack_us) >= attack_interval_us {
+                        // attacker_id = enemy.id (enemy IDs share the u64 attacker_id column with player IDs)
                         apply_damage(ctx, target_id, enemy.id, 0, def.damage);
                         Enemy { last_attack_us: now_us, ..enemy }
                     } else {
