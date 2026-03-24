@@ -64,6 +64,7 @@ pub struct Admin {
 const ADMIN_IDENTITIES: &[&str] = &[
     "0xc2007b97a0605a88c5ce60d229b1067a1bfeb27a37cf6371b5830c6b404932da",
 ];
+const _: () = assert!(!ADMIN_IDENTITIES.is_empty(), "ADMIN_IDENTITIES must contain at least one entry");
 
 fn identity_from_hex(hex: &str) -> Identity {
     let hex = hex.trim_start_matches("0x");
@@ -174,6 +175,79 @@ pub struct ManaRegenTick {
     pub scheduled_at: ScheduleAt,
 }
 
+// Defines an enemy archetype — shared stats referenced by all instances.
+// Accessor matches autogen name "enemy_def".
+#[table(accessor = enemy_def, public)]
+pub struct EnemyDefinition {
+    #[primary_key]
+    #[auto_inc]
+    pub id:              u64,
+    pub name:            String,
+    pub enemy_type:      EnemyType,
+    pub prefab_name:     String,
+    pub max_health:      i32,
+    pub damage:          i32,
+    pub aggro_range:     f32,
+    pub attack_range:    f32,
+    pub attack_speed_ms: u64,
+    pub move_speed:      f32,
+}
+
+// Marks a location in a zone where enemies of a given def spawn automatically.
+#[table(accessor = spawn_point, public)]
+pub struct SpawnPoint {
+    #[primary_key]
+    #[auto_inc]
+    pub id:               u64,
+    #[index(btree)]
+    pub zone_id:          u64,
+    pub x:                f32,
+    pub y:                f32,
+    pub enemy_def_id:     u64,
+    pub max_count:        u32,
+    pub respawn_delay_s:  u32,
+}
+
+// One row per live (or recently dead) enemy instance.
+#[table(accessor = enemy, public)]
+pub struct Enemy {
+    #[primary_key]
+    #[auto_inc]
+    pub id:               u64,
+    #[index(btree)]
+    pub zone_id:          u64,
+    pub spawn_point_id:   Option<u64>,
+    pub enemy_def_id:     u64,
+    pub position_x:       f32,
+    pub position_y:       f32,
+    pub home_x:           f32,
+    pub home_y:           f32,
+    pub health:           i32,
+    pub ai_state:         AiState,
+    pub target_player_id: Option<u64>,
+    pub last_attack_us:   u64,
+    pub is_dead:          bool,
+}
+
+// Scheduled once per dead enemy to respawn it after respawn_delay_s.
+#[table(accessor = enemy_respawn_tick, scheduled(tick_enemy_respawn))]
+pub struct EnemyRespawnTick {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub enemy_id:     u64,
+}
+
+// Global AI tick — runs every 500ms to drive the enemy state machine.
+#[table(accessor = ai_tick, scheduled(tick_ai))]
+pub struct AiTick {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
 #[reducer]
 pub fn tick_status_effects(ctx: &ReducerContext, _tick: StatusEffectTick) {
     let now_us = ctx.timestamp
@@ -240,6 +314,12 @@ pub fn client_connected(ctx: &ReducerContext) {
         log::info!("client_connected: bootstrapped mana regen tick");
     }
 }
+
+#[reducer]
+pub fn tick_enemy_respawn(ctx: &ReducerContext, _tick: EnemyRespawnTick) {}
+
+#[reducer]
+pub fn tick_ai(ctx: &ReducerContext, _tick: AiTick) {}
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
