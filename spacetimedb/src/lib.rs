@@ -15,6 +15,20 @@ pub enum StatusEffectType {
     Poison,
 }
 
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum AiState {
+    Idle,
+    Chase,
+    Attack,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum EnemyType {
+    Melee,
+    Ranged,
+    Caster,
+}
+
 // Define a simple Player table.
 // Note: #[table(...)] is the table attribute — do NOT also add #[derive(SpacetimeType)].
 // SpacetimeType is only for custom embedded types used as fields inside table rows.
@@ -35,6 +49,36 @@ pub struct Player {
     pub mana: i32,
     pub max_mana: i32,
     pub is_dead: bool,
+}
+
+// Admin table — one row per admin identity.
+// Admin set is compile-time; seeded in init(). Changes require --delete-data republish.
+#[table(accessor = admin, public)]
+pub struct Admin {
+    #[primary_key]
+    pub identity: Identity,
+}
+
+// Run `spacetime login show` to get your 64-char identity hex.
+// Add each admin identity (with or without "0x" prefix) before publishing.
+const ADMIN_IDENTITIES: &[&str] = &[
+    "0xc2007b97a0605a88c5ce60d229b1067a1bfeb27a37cf6371b5830c6b404932da",
+];
+
+fn identity_from_hex(hex: &str) -> Identity {
+    let hex = hex.trim_start_matches("0x");
+    assert!(hex.len() == 64, "Admin identity hex must be 64 characters (32 bytes)");
+    let mut bytes = [0u8; 32];
+    for i in 0..32 {
+        bytes[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .expect("ADMIN_IDENTITIES contains non-hex characters");
+    }
+    Identity::from_byte_array(bytes)
+}
+
+/// Returns true if ctx.sender() is in the Admin table.
+fn is_admin(ctx: &ReducerContext) -> bool {
+    ctx.db.admin().identity().find(ctx.sender()).is_some()
 }
 
 // Define a Zone table
@@ -199,6 +243,12 @@ pub fn client_connected(ctx: &ReducerContext) {
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
+    // Seed compile-time admin identities (only on fresh databases)
+    for &hex in ADMIN_IDENTITIES {
+        ctx.db.admin().insert(Admin { identity: identity_from_hex(hex) });
+    }
+    log::info!("init: seeded {} admin identity(ies)", ADMIN_IDENTITIES.len());
+
     // Seed starter abilities if table is empty
     if ctx.db.ability().iter().next().is_none() {
         ctx.db.ability().insert(Ability {
