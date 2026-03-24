@@ -74,6 +74,9 @@ fn identity_from_hex(hex: &str) -> Identity {
         bytes[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
             .expect("ADMIN_IDENTITIES contains non-hex characters");
     }
+    // `spacetime login show` outputs identity in big-endian (MSB first);
+    // Identity::from_byte_array expects the bytes in SpacetimeDB's internal order (reversed).
+    bytes.reverse();
     Identity::from_byte_array(bytes)
 }
 
