@@ -397,7 +397,7 @@ pub fn tick_ai(ctx: &ReducerContext, _tick: AiTick) {
                     continue;
                 }
                 let d2 = dist_sq(player.position_x, player.position_y, enemy.position_x, enemy.position_y);
-                if d2 > def.aggro_range * def.aggro_range * 1.5 {
+                if d2 > def.aggro_range * def.aggro_range * 2.25 {
                     let e = return_idle(&enemy);
                     ctx.db.enemy().id().update(e);
                     continue;
@@ -1307,6 +1307,8 @@ fn apply_damage_to_enemy(
 
     let new_health = (enemy.health - amount).clamp(0, max_health);
     let is_dead = new_health == 0 && amount > 0;
+    // Save spawn_point_id before enemy is moved into the update struct
+    let spawn_point_id = enemy.spawn_point_id;
 
     ctx.db.enemy().id().update(Enemy {
         health: new_health,
@@ -1319,7 +1321,7 @@ fn apply_damage_to_enemy(
     if is_dead {
         log::info!("apply_damage_to_enemy: enemy={} killed by player={}", enemy_id, attacker_id);
         // Schedule respawn if this enemy belongs to a spawn point
-        if let Some(sp_id) = ctx.db.enemy().id().find(&enemy_id).and_then(|e| e.spawn_point_id) {
+        if let Some(sp_id) = spawn_point_id {
             if let Some(sp) = ctx.db.spawn_point().id().find(&sp_id) {
                 ctx.db.enemy_respawn_tick().insert(EnemyRespawnTick {
                     scheduled_id: 0,
