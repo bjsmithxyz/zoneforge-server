@@ -449,7 +449,8 @@ pub fn use_ability(
     // Guard against pathological damage values that could overflow i32 arithmetic
     const MAX_ABILITY_DAMAGE: i32 = 10_000;
     if ability.damage.abs() > MAX_ABILITY_DAMAGE {
-        return Err(format!("Ability {} has invalid damage value {}", ability_id, ability.damage));
+        log::error!("Ability {} has invalid damage value {}", ability_id, ability.damage);
+        return Err("Invalid ability configuration".to_string());
     }
 
     // 3. Self-cast: target must be the caller
@@ -583,7 +584,7 @@ pub fn respawn(ctx: &ReducerContext) -> Result<(), String> {
 // Reducer to create a new player
 #[reducer]
 pub fn create_player(ctx: &ReducerContext, name: String) {
-    // Validate name: non-empty, max 64 chars, no null bytes
+    // Validate name: non-empty, max 64 bytes, no null bytes
     if name.is_empty() || name.len() > 64 || name.contains('\0') {
         log::warn!("create_player: invalid name from {}", ctx.sender());
         return;
@@ -635,15 +636,12 @@ pub fn move_player(ctx: &ReducerContext, new_x: f32, new_y: f32) -> Result<(), S
             new_x, new_y, zone.terrain_width, zone.terrain_height
         ));
     }
-    let clamped_x = new_x;
-    let clamped_y = new_y;
-
     ctx.db.player().id().update(Player {
-        position_x: clamped_x,
-        position_y: clamped_y,
+        position_x: new_x,
+        position_y: new_y,
         ..player
     });
-    log::info!("Player moved to ({}, {})", clamped_x, clamped_y);
+    log::info!("Player moved to ({}, {})", new_x, new_y);
     Ok(())
 }
 
@@ -796,6 +794,12 @@ pub fn spawn_entity(
     if prefab_name.is_empty() {
         return Err("prefab_name cannot be empty".to_string());
     }
+    if entity_type.is_empty() {
+        return Err("entity_type cannot be empty".to_string());
+    }
+    if prefab_name.len() > 128 || entity_type.len() > 64 {
+        return Err("prefab_name or entity_type exceeds maximum length".to_string());
+    }
 
     // Validate zone exists and position is in bounds
     let zone = ctx.db.zone().id().find(&zone_id)
@@ -813,9 +817,6 @@ pub fn spawn_entity(
     const MAX_ELEVATION: f32 = 200.0;
     if elevation < -10.0 || elevation > MAX_ELEVATION {
         return Err(format!("Elevation {} out of range [-10, {}]", elevation, MAX_ELEVATION));
-    }
-    if prefab_name.len() > 128 || entity_type.len() > 64 {
-        return Err("prefab_name or entity_type exceeds maximum length".to_string());
     }
     ctx.db.entity_instance().insert(EntityInstance {
         id: 0,
