@@ -313,13 +313,186 @@ pub fn client_connected(ctx: &ReducerContext) {
         });
         log::info!("client_connected: bootstrapped mana regen tick");
     }
+    if ctx.db.ai_tick().iter().next().is_none() {
+        ctx.db.ai_tick().insert(AiTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_millis(500)
+            ),
+        });
+        log::info!("client_connected: bootstrapped AI tick");
+    }
 }
 
 #[reducer]
-pub fn tick_enemy_respawn(ctx: &ReducerContext, _tick: EnemyRespawnTick) {}
+pub fn tick_enemy_respawn(ctx: &ReducerContext, tick: EnemyRespawnTick) {
+    let Some(enemy) = ctx.db.enemy().id().find(&tick.enemy_id) else { return; };
+    if !enemy.is_dead { return; }  // Already revived
 
+    let def = ctx.db.enemy_def().id().find(&enemy.enemy_def_id);
+    let max_health = def.map(|d| d.max_health).unwrap_or(100);
+
+    ctx.db.enemy().id().update(Enemy {
+        health: max_health,
+        is_dead: false,
+        ai_state: AiState::Idle,
+        target_player_id: None,
+        position_x: enemy.home_x,
+        position_y: enemy.home_y,
+        ..enemy
+    });
+    log::info!("tick_enemy_respawn: enemy={} respawned", tick.enemy_id);
+}
+
+/// Drives the enemy AI state machine every 500ms.
 #[reducer]
-pub fn tick_ai(ctx: &ReducerContext, _tick: AiTick) {}
+pub fn tick_ai(ctx: &ReducerContext, _tick: AiTick) {
+    let now_us = ctx.timestamp
+        .to_duration_since_unix_epoch()
+        .unwrap_or_default()
+        .as_micros() as u64;
+
+    let enemies: Vec<Enemy> = ctx.db.enemy().iter().filter(|e| !e.is_dead).collect();
+
+    for enemy in enemies {
+        let Some(def) = ctx.db.enemy_def().id().find(&enemy.enemy_def_id) else { continue; };
+
+        let updated = match enemy.ai_state.clone() {
+            AiState::Idle => {
+                let target = ctx.db.player().iter()
+                    .filter(|p| !p.is_dead && p.zone_id == enemy.zone_id)
+                    .min_by(|a, b| {
+                        let da = dist_sq(a.position_x, a.position_y, enemy.position_x, enemy.position_y);
+                        let db = dist_sq(b.position_x, b.position_y, enemy.position_x, enemy.position_y);
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                if let Some(p) = target {
+                    let d2 = dist_sq(p.position_x, p.position_y, enemy.position_x, enemy.position_y);
+                    if d2 <= def.aggro_range * def.aggro_range {
+                        Enemy { ai_state: AiState::Chase, target_player_id: Some(p.id), ..enemy }
+                    } else {
+                        enemy
+                    }
+                } else {
+                    enemy
+                }
+            },
+            AiState::Chase => {
+                let target_id = match enemy.target_player_id {
+                    Some(id) => id,
+                    None => {
+                        let e = return_idle(&enemy);
+                        ctx.db.enemy().id().update(e);
+                        continue;
+                    }
+                };
+                let Some(player) = ctx.db.player().id().find(&target_id) else {
+                    let e = return_idle(&enemy);
+                    ctx.db.enemy().id().update(e);
+                    continue;
+                };
+                if player.is_dead {
+                    let e = return_idle(&enemy);
+                    ctx.db.enemy().id().update(e);
+                    continue;
+                }
+                let d2 = dist_sq(player.position_x, player.position_y, enemy.position_x, enemy.position_y);
+                if d2 > def.aggro_range * def.aggro_range * 1.5 {
+                    let e = return_idle(&enemy);
+                    ctx.db.enemy().id().update(e);
+                    continue;
+                }
+                if d2 <= def.attack_range * def.attack_range {
+                    Enemy { ai_state: AiState::Attack, ..enemy }
+                } else {
+                    let step = def.move_speed * 0.5;
+                    let (nx, ny) = step_toward(
+                        enemy.position_x, enemy.position_y,
+                        player.position_x, player.position_y,
+                        step,
+                    );
+                    Enemy { position_x: nx, position_y: ny, ..enemy }
+                }
+            },
+            AiState::Attack => {
+                let target_id = match enemy.target_player_id {
+                    Some(id) => id,
+                    None => {
+                        let e = return_idle(&enemy);
+                        ctx.db.enemy().id().update(e);
+                        continue;
+                    }
+                };
+                let Some(player) = ctx.db.player().id().find(&target_id) else {
+                    let e = return_idle(&enemy);
+                    ctx.db.enemy().id().update(e);
+                    continue;
+                };
+                if player.is_dead {
+                    let e = return_idle(&enemy);
+                    ctx.db.enemy().id().update(e);
+                    continue;
+                }
+                let d2 = dist_sq(player.position_x, player.position_y, enemy.position_x, enemy.position_y);
+                if d2 > def.attack_range * def.attack_range {
+                    Enemy { ai_state: AiState::Chase, ..enemy }
+                } else {
+                    let attack_interval_us = def.attack_speed_ms as u64 * 1000;
+                    if now_us.saturating_sub(enemy.last_attack_us) >= attack_interval_us {
+                        apply_damage(ctx, target_id, enemy.id, 0, def.damage);
+                        Enemy { last_attack_us: now_us, ..enemy }
+                    } else {
+                        enemy
+                    }
+                }
+            },
+        };
+        ctx.db.enemy().id().update(updated);
+    }
+
+    // Re-schedule next tick
+    ctx.db.ai_tick().insert(AiTick {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(
+            ctx.timestamp + std::time::Duration::from_millis(500)
+        ),
+    });
+}
+
+fn return_idle(enemy: &Enemy) -> Enemy {
+    Enemy {
+        id: enemy.id,
+        zone_id: enemy.zone_id,
+        spawn_point_id: enemy.spawn_point_id,
+        enemy_def_id: enemy.enemy_def_id,
+        position_x: enemy.home_x,
+        position_y: enemy.home_y,
+        home_x: enemy.home_x,
+        home_y: enemy.home_y,
+        health: enemy.health,
+        ai_state: AiState::Idle,
+        target_player_id: None,
+        last_attack_us: enemy.last_attack_us,
+        is_dead: enemy.is_dead,
+    }
+}
+
+fn dist_sq(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let dx = ax - bx;
+    let dy = ay - by;
+    dx * dx + dy * dy
+}
+
+fn step_toward(from_x: f32, from_y: f32, to_x: f32, to_y: f32, step: f32) -> (f32, f32) {
+    let dx = to_x - from_x;
+    let dy = to_y - from_y;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist <= step {
+        (to_x, to_y)
+    } else {
+        (from_x + dx / dist * step, from_y + dy / dist * step)
+    }
+}
 
 #[reducer(init)]
 pub fn init(ctx: &ReducerContext) {
@@ -381,6 +554,17 @@ pub fn init(ctx: &ReducerContext) {
             ),
         });
         log::info!("init: scheduled mana regen tick");
+    }
+
+    // Start the enemy AI tick
+    if ctx.db.ai_tick().iter().next().is_none() {
+        ctx.db.ai_tick().insert(AiTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_millis(500)
+            ),
+        });
+        log::info!("init: scheduled AI tick");
     }
 }
 
@@ -656,6 +840,10 @@ pub fn create_zone(
     terrain_height: u32,
     water_level: f32,
 ) {
+    if !is_admin(ctx) {
+        log::warn!("create_zone: unauthorized caller {}", ctx.sender());
+        return;
+    }
     // Input validation
     const MAX_TERRAIN_DIM: u32 = 512;
     const MAX_NAME_LEN: usize = 128;
@@ -726,6 +914,9 @@ pub fn update_terrain_chunk(
     height_data: Vec<u8>,
     splat_data: Vec<u8>,
 ) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
     if height_data.len() != 4096 {
         return Err(format!("height_data must be 4096 bytes, got {}", height_data.len()));
     }
@@ -791,6 +982,9 @@ pub fn spawn_entity(
     elevation: f32,
     entity_type: String,
 ) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
     if prefab_name.is_empty() {
         return Err("prefab_name cannot be empty".to_string());
     }
@@ -829,4 +1023,312 @@ pub fn spawn_entity(
     });
     log::info!("Entity '{}' spawned in zone {} at ({}, {}, {})", prefab_name, zone_id, x, y, elevation);
     Ok(())
+}
+
+#[reducer]
+pub fn create_enemy_def(
+    ctx: &ReducerContext,
+    name: String,
+    enemy_type: EnemyType,
+    prefab_name: String,
+    max_health: i32,
+    damage: i32,
+    aggro_range: f32,
+    attack_range: f32,
+    attack_speed_ms: u64,
+    move_speed: f32,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    if name.is_empty() || name.len() > 128 || name.contains('\0') {
+        return Err("Invalid enemy def name".to_string());
+    }
+    if prefab_name.is_empty() || prefab_name.len() > 128 {
+        return Err("Invalid prefab_name".to_string());
+    }
+    if max_health <= 0 || max_health > 100_000 {
+        return Err(format!("max_health {} out of range [1, 100000]", max_health));
+    }
+    if damage < 0 || damage > 10_000 {
+        return Err(format!("damage {} out of range [0, 10000]", damage));
+    }
+    if !aggro_range.is_finite() || aggro_range < 0.0 || aggro_range > 200.0 {
+        return Err("aggro_range out of range [0, 200]".to_string());
+    }
+    if !attack_range.is_finite() || attack_range < 0.0 || attack_range > aggro_range {
+        return Err("attack_range must be in [0, aggro_range]".to_string());
+    }
+    if attack_speed_ms == 0 || attack_speed_ms > 60_000 {
+        return Err("attack_speed_ms out of range [1, 60000]".to_string());
+    }
+    if !move_speed.is_finite() || move_speed < 0.0 || move_speed > 100.0 {
+        return Err("move_speed out of range [0, 100]".to_string());
+    }
+    ctx.db.enemy_def().insert(EnemyDefinition {
+        id: 0,
+        name,
+        enemy_type,
+        prefab_name,
+        max_health,
+        damage,
+        aggro_range,
+        attack_range,
+        attack_speed_ms,
+        move_speed,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn delete_enemy_def(ctx: &ReducerContext, def_id: u64) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    ctx.db.enemy_def().id().find(&def_id)
+        .ok_or_else(|| format!("EnemyDef {} not found", def_id))?;
+    ctx.db.enemy_def().id().delete(&def_id);
+    Ok(())
+}
+
+#[reducer]
+pub fn create_spawn_point(
+    ctx: &ReducerContext,
+    zone_id: u64,
+    x: f32,
+    y: f32,
+    enemy_def_id: u64,
+    max_count: u32,
+    respawn_delay_s: u32,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    let zone = ctx.db.zone().id().find(&zone_id)
+        .ok_or_else(|| format!("Zone {} not found", zone_id))?;
+    ctx.db.enemy_def().id().find(&enemy_def_id)
+        .ok_or_else(|| format!("EnemyDef {} not found", enemy_def_id))?;
+    if !x.is_finite() || !y.is_finite()
+        || x < 0.0 || x > zone.terrain_width as f32
+        || y < 0.0 || y > zone.terrain_height as f32
+    {
+        return Err("Spawn point position out of zone bounds".to_string());
+    }
+    if max_count == 0 || max_count > 100 {
+        return Err("max_count out of range [1, 100]".to_string());
+    }
+    if respawn_delay_s > 3600 {
+        return Err("respawn_delay_s must be <= 3600".to_string());
+    }
+    ctx.db.spawn_point().insert(SpawnPoint {
+        id: 0,
+        zone_id,
+        x,
+        y,
+        enemy_def_id,
+        max_count,
+        respawn_delay_s,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn delete_spawn_point(ctx: &ReducerContext, spawn_point_id: u64) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    ctx.db.spawn_point().id().find(&spawn_point_id)
+        .ok_or_else(|| format!("SpawnPoint {} not found", spawn_point_id))?;
+    ctx.db.spawn_point().id().delete(&spawn_point_id);
+    Ok(())
+}
+
+#[reducer]
+pub fn spawn_enemy_manual(
+    ctx: &ReducerContext,
+    zone_id: u64,
+    x: f32,
+    y: f32,
+    enemy_def_id: u64,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    let zone = ctx.db.zone().id().find(&zone_id)
+        .ok_or_else(|| format!("Zone {} not found", zone_id))?;
+    let def = ctx.db.enemy_def().id().find(&enemy_def_id)
+        .ok_or_else(|| format!("EnemyDef {} not found", enemy_def_id))?;
+    if !x.is_finite() || !y.is_finite()
+        || x < 0.0 || x > zone.terrain_width as f32
+        || y < 0.0 || y > zone.terrain_height as f32
+    {
+        return Err("Spawn position out of zone bounds".to_string());
+    }
+    ctx.db.enemy().insert(Enemy {
+        id: 0,
+        zone_id,
+        spawn_point_id: None,
+        enemy_def_id,
+        position_x: x,
+        position_y: y,
+        home_x: x,
+        home_y: y,
+        health: def.max_health,
+        ai_state: AiState::Idle,
+        target_player_id: None,
+        last_attack_us: 0,
+        is_dead: false,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn despawn_enemy(ctx: &ReducerContext, enemy_id: u64) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    ctx.db.enemy().id().find(&enemy_id)
+        .ok_or_else(|| format!("Enemy {} not found", enemy_id))?;
+    ctx.db.enemy().id().delete(&enemy_id);
+    Ok(())
+}
+
+/// Player uses an ability to attack an enemy. Called from CombatInputHandler.
+#[reducer]
+pub fn attack_enemy(
+    ctx: &ReducerContext,
+    ability_id: u64,
+    enemy_id: u64,
+) -> Result<(), String> {
+    // 1. Caller must exist and not be dead
+    let player = ctx.db.player().identity().find(ctx.sender())
+        .ok_or("Player not found")?;
+    if player.is_dead {
+        return Err("Cannot use ability while dead".to_string());
+    }
+
+    // 2. Ability must exist and be non-self-cast
+    let ability = ctx.db.ability().id().find(&ability_id)
+        .ok_or("Ability not found")?;
+    if ability.ability_type == AbilityType::SelfCast {
+        return Err("Self-cast abilities cannot target enemies".to_string());
+    }
+
+    // 3. Target enemy must exist and not be dead
+    let enemy = ctx.db.enemy().id().find(&enemy_id)
+        .ok_or("Enemy not found")?;
+    if enemy.is_dead {
+        return Err("Enemy is already dead".to_string());
+    }
+
+    // 4. Range check
+    let dx = player.position_x - enemy.position_x;
+    let dz = player.position_y - enemy.position_y;
+    let dist_sq = dx * dx + dz * dz;
+    if dist_sq > ability.range * ability.range {
+        return Err(format!(
+            "Enemy out of range (dist={:.1}, range={:.1})",
+            dist_sq.sqrt(), ability.range
+        ));
+    }
+
+    // 5. Cooldown check
+    let now_us = ctx.timestamp
+        .to_duration_since_unix_epoch()
+        .unwrap_or_default()
+        .as_micros();
+    let on_cooldown = ctx.db.player_cooldown()
+        .player_id()
+        .filter(&player.id)
+        .any(|cd| {
+            if cd.ability_id != ability_id { return false; }
+            let ready_us = cd.ready_at
+                .to_duration_since_unix_epoch()
+                .unwrap_or_default()
+                .as_micros();
+            ready_us > now_us
+        });
+    if on_cooldown {
+        return Err("Ability on cooldown".to_string());
+    }
+
+    // 6. Mana check
+    if player.mana < ability.mana_cost {
+        return Err(format!("Insufficient mana ({}/{})", player.mana, ability.mana_cost));
+    }
+
+    // 7. Damage bounds guard
+    const MAX_ABILITY_DAMAGE: i32 = 10_000;
+    if ability.damage.abs() > MAX_ABILITY_DAMAGE {
+        log::error!("Ability {} has invalid damage value {}", ability_id, ability.damage);
+        return Err("Invalid ability configuration".to_string());
+    }
+
+    // All checks passed — deduct mana and update cooldown
+    let player_id = player.id;
+    let new_mana = player.mana - ability.mana_cost;
+    ctx.db.player().id().update(Player { mana: new_mana, ..player });
+
+    let ready_at = ctx.timestamp + std::time::Duration::from_millis(ability.cooldown_ms);
+    if let Some(existing_cd) = ctx.db.player_cooldown()
+        .player_id()
+        .filter(&player_id)
+        .find(|cd| cd.ability_id == ability_id)
+    {
+        ctx.db.player_cooldown().id().update(PlayerCooldown { ready_at, ..existing_cd });
+    } else {
+        ctx.db.player_cooldown().insert(PlayerCooldown {
+            id: 0,
+            player_id,
+            ability_id,
+            ready_at,
+        });
+    }
+
+    // Apply damage to enemy
+    apply_damage_to_enemy(ctx, enemy_id, player_id, ability.damage);
+
+    log::info!("attack_enemy: player={} ability={} enemy={}", player_id, ability_id, enemy_id);
+    Ok(())
+}
+
+/// Applies `amount` damage to an enemy. Negative amount = heal.
+fn apply_damage_to_enemy(
+    ctx: &ReducerContext,
+    enemy_id: u64,
+    attacker_id: u64,
+    amount: i32,
+) {
+    let Some(enemy) = ctx.db.enemy().id().find(&enemy_id) else { return; };
+    if enemy.is_dead { return; }
+
+    let def = ctx.db.enemy_def().id().find(&enemy.enemy_def_id);
+    let max_health = def.map(|d| d.max_health).unwrap_or(enemy.health);
+
+    let new_health = (enemy.health - amount).clamp(0, max_health);
+    let is_dead = new_health == 0 && amount > 0;
+
+    ctx.db.enemy().id().update(Enemy {
+        health: new_health,
+        is_dead,
+        ai_state: if is_dead { AiState::Idle } else { enemy.ai_state.clone() },
+        target_player_id: if is_dead { None } else { enemy.target_player_id },
+        ..enemy
+    });
+
+    if is_dead {
+        log::info!("apply_damage_to_enemy: enemy={} killed by player={}", enemy_id, attacker_id);
+        // Schedule respawn if this enemy belongs to a spawn point
+        if let Some(sp_id) = ctx.db.enemy().id().find(&enemy_id).and_then(|e| e.spawn_point_id) {
+            if let Some(sp) = ctx.db.spawn_point().id().find(&sp_id) {
+                ctx.db.enemy_respawn_tick().insert(EnemyRespawnTick {
+                    scheduled_id: 0,
+                    scheduled_at: ScheduleAt::Time(
+                        ctx.timestamp + std::time::Duration::from_secs(sp.respawn_delay_s as u64)
+                    ),
+                    enemy_id,
+                });
+            }
+        }
+    }
 }
