@@ -1383,6 +1383,13 @@ pub fn create_portal(
     if !is_admin(ctx) {
         return Err("Not authorized: admin only".to_string());
     }
+    if !source_x.is_finite() || !source_y.is_finite()
+        || !dest_spawn_x.is_finite() || !dest_spawn_y.is_finite() {
+        return Err("Portal coordinates must be finite".to_string());
+    }
+    if label.len() > 64 || label.contains('\0') {
+        return Err("label exceeds 64 bytes or contains invalid characters".to_string());
+    }
     let source_zone = ctx.db.zone().id().find(&source_zone_id)
         .ok_or_else(|| format!("Zone {} not found", source_zone_id))?;
     let dest_zone = ctx.db.zone().id().find(&dest_zone_id)
