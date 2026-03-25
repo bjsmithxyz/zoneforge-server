@@ -1213,6 +1213,31 @@ pub fn spawn_enemy_manual(
     Ok(())
 }
 
+/// Admin override: force an enemy into a specific AI state (useful for testing/debugging).
+#[reducer]
+pub fn update_ai_state(
+    ctx: &ReducerContext,
+    enemy_id: u64,
+    new_state: AiState,
+    target_player_id: Option<u64>,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    let enemy = ctx.db.enemy().id().find(&enemy_id)
+        .ok_or_else(|| format!("Enemy {} not found", enemy_id))?;
+    if enemy.is_dead {
+        return Err("Cannot update AI state of dead enemy".to_string());
+    }
+    log::info!("update_ai_state: enemy={} state={:?} target={:?}", enemy_id, new_state, target_player_id);
+    ctx.db.enemy().id().update(Enemy {
+        ai_state: new_state,
+        target_player_id,
+        ..enemy
+    });
+    Ok(())
+}
+
 #[reducer]
 pub fn despawn_enemy(ctx: &ReducerContext, enemy_id: u64) -> Result<(), String> {
     if !is_admin(ctx) {
