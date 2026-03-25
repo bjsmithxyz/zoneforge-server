@@ -872,10 +872,6 @@ pub fn create_zone(
     terrain_height: u32,
     water_level: f32,
 ) {
-    if !is_admin(ctx) {
-        log::warn!("create_zone: unauthorized caller {}", ctx.sender());
-        return;
-    }
     // Input validation
     const MAX_TERRAIN_DIM: u32 = 512;
     const MAX_NAME_LEN: usize = 128;
@@ -946,9 +942,6 @@ pub fn update_terrain_chunk(
     height_data: Vec<u8>,
     splat_data: Vec<u8>,
 ) -> Result<(), String> {
-    if !is_admin(ctx) {
-        return Err("Not authorized: admin only".to_string());
-    }
     if height_data.len() != 4096 {
         return Err(format!("height_data must be 4096 bytes, got {}", height_data.len()));
     }
@@ -1014,9 +1007,6 @@ pub fn spawn_entity(
     elevation: f32,
     entity_type: String,
 ) -> Result<(), String> {
-    if !is_admin(ctx) {
-        return Err("Not authorized: admin only".to_string());
-    }
     if prefab_name.is_empty() {
         return Err("prefab_name cannot be empty".to_string());
     }
@@ -1406,9 +1396,6 @@ pub fn create_portal(
     bidirectional: bool,
     label: String,
 ) -> Result<(), String> {
-    if !is_admin(ctx) {
-        return Err("Not authorized: admin only".to_string());
-    }
     if !source_x.is_finite() || !source_y.is_finite()
         || !dest_spawn_x.is_finite() || !dest_spawn_y.is_finite() {
         return Err("Portal coordinates must be finite".to_string());
@@ -1446,12 +1433,9 @@ pub fn create_portal(
     Ok(())
 }
 
-/// Admin-only. Deletes a portal by ID.
+/// Deletes a portal by ID.
 #[reducer]
 pub fn delete_portal(ctx: &ReducerContext, portal_id: u64) -> Result<(), String> {
-    if !is_admin(ctx) {
-        return Err("Not authorized: admin only".to_string());
-    }
     ctx.db.portal().id().find(&portal_id)
         .ok_or_else(|| format!("Portal {} not found", portal_id))?;
     ctx.db.portal().id().delete(&portal_id);
