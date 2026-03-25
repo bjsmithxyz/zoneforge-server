@@ -63,6 +63,7 @@ pub struct Admin {
 // Add each admin identity (with or without "0x" prefix) before publishing.
 const ADMIN_IDENTITIES: &[&str] = &[
     "0xc2007b97a0605a88c5ce60d229b1067a1bfeb27a37cf6371b5830c6b404932da",
+    "0xc200496650f3c734cb567002e110e78f6876c4b17ca9512aed8927dd412a104b",
 ];
 const _: () = assert!(!ADMIN_IDENTITIES.is_empty(), "ADMIN_IDENTITIES must contain at least one entry");
 
