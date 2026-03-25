@@ -1390,6 +1390,9 @@ pub fn create_portal(
     if label.len() > 64 || label.contains('\0') {
         return Err("label exceeds 64 bytes or contains invalid characters".to_string());
     }
+    if source_zone_id == dest_zone_id {
+        return Err("source and destination zones must differ".to_string());
+    }
     let source_zone = ctx.db.zone().id().find(&source_zone_id)
         .ok_or_else(|| format!("Zone {} not found", source_zone_id))?;
     let dest_zone = ctx.db.zone().id().find(&dest_zone_id)
