@@ -810,15 +810,23 @@ pub fn create_player(ctx: &ReducerContext, name: String) {
         log::info!("create_player: identity {} already exists, skipping", ctx.sender());
         return;
     }
-    let (spawn_x, spawn_y) = ctx.db.zone().id().find(&1u64)
-        .map(|z| (z.terrain_width as f32 / 2.0, z.terrain_height as f32 / 2.0))
-        .unwrap_or((32.0, 32.0));
+    // Use the zone with the lowest id as the default spawn zone.
+    // This avoids a hardcoded id=1 that breaks when zones are created with auto-increment ids.
+    let Some(default_zone) = ctx.db.zone().iter().min_by_key(|z| z.id) else {
+        log::warn!("create_player: no zones exist yet — create a zone first");
+        return;
+    };
+    let default_zone_id = default_zone.id;
+    let (spawn_x, spawn_y) = (
+        default_zone.terrain_width  as f32 / 2.0,
+        default_zone.terrain_height as f32 / 2.0,
+    );
 
     let player = Player {
         id: 0,
         identity: ctx.sender(),
         name,
-        zone_id: 1,
+        zone_id: default_zone_id,
         position_x: spawn_x,
         position_y: spawn_y,
         health: 100,
