@@ -16,6 +16,39 @@ pub enum StatusEffectType {
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum ItemType {
+    Weapon,
+    Armor,
+    Accessory,
+    Consumable,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
+pub enum Rarity {
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+}
+
+/// Shared item template. All players see all item definitions.
+#[table(accessor = item_def, public)]
+pub struct ItemDefinition {
+    #[primary_key]
+    #[auto_inc]
+    pub id:           u64,
+    pub name:         String,
+    pub description:  String,
+    pub item_type:    ItemType,
+    pub rarity:       Rarity,
+    pub icon_name:    String,
+    pub damage_bonus: i32,
+    pub armor_bonus:  i32,
+    pub healing:      i32,
+    pub value:        u32,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub enum AiState {
     Idle,
     Chase,
@@ -1500,4 +1533,49 @@ pub fn enter_zone(ctx: &ReducerContext) -> Result<(), String> {
     }
 
     Err("No portal within range".to_string())
+}
+
+/// Admin: create an item definition (shared template visible to all clients).
+#[reducer]
+pub fn create_item_def(
+    ctx: &ReducerContext,
+    name: String,
+    description: String,
+    item_type: ItemType,
+    rarity: Rarity,
+    icon_name: String,
+    damage_bonus: i32,
+    armor_bonus: i32,
+    healing: i32,
+    value: u32,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    if name.is_empty() || name.len() > 64 {
+        return Err("name must be 1–64 characters".to_string());
+    }
+    ctx.db.item_def().insert(ItemDefinition {
+        id: 0,
+        name,
+        description,
+        item_type,
+        rarity,
+        icon_name,
+        damage_bonus,
+        armor_bonus,
+        healing,
+        value,
+    });
+    Ok(())
+}
+
+/// Admin: delete an item definition. Does NOT remove it from inventories.
+#[reducer]
+pub fn delete_item_def(ctx: &ReducerContext, item_def_id: u64) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    ctx.db.item_def().id().delete(&item_def_id);
+    Ok(())
 }
