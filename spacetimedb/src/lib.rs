@@ -1450,7 +1450,10 @@ fn spawn_loot_drops(ctx: &ReducerContext, enemy: &Enemy) {
                     .as_micros() as u64,
             )
             .wrapping_add(entry.id);
-        let roll = (seed % 101) as u32;
+        if entry.drop_chance == 0 {
+            continue;
+        }
+        let roll = (seed % 100 + 1) as u32;  // 1-100 inclusive
         if roll > entry.drop_chance {
             continue;
         }
@@ -1499,6 +1502,7 @@ fn apply_damage_to_enemy(
     if is_dead {
         log::info!("apply_damage_to_enemy: enemy={} killed by player={}", enemy_id, attacker_id);
         // Spawn loot drops
+        // Re-fetch enemy after update (the local `enemy` was moved into the update call above).
         if let Some(dead_enemy) = ctx.db.enemy().id().find(&enemy_id) {
             spawn_loot_drops(ctx, &dead_enemy);
         }
@@ -1859,6 +1863,7 @@ pub fn create_loot_table(
         .ok_or_else(|| "EnemyDefinition not found".to_string())?;
     ctx.db.item_def().id().find(&item_def_id)
         .ok_or_else(|| "ItemDefinition not found".to_string())?;
+    // Duplicate entries (same enemy_def + item_def) are allowed — each entry rolls independently.
     ctx.db.loot_table().insert(LootTable {
         id: 0,
         enemy_def_id,
