@@ -1552,8 +1552,8 @@ pub fn create_item_def(
     if !is_admin(ctx) {
         return Err("Not authorized: admin only".to_string());
     }
-    if name.is_empty() || name.len() > 64 {
-        return Err("name must be 1–64 characters".to_string());
+    if name.is_empty() || name.len() > 64 || name.contains('\0') {
+        return Err("name must be 1–64 characters, no null bytes".to_string());
     }
     ctx.db.item_def().insert(ItemDefinition {
         id: 0,
@@ -1576,6 +1576,8 @@ pub fn delete_item_def(ctx: &ReducerContext, item_def_id: u64) -> Result<(), Str
     if !is_admin(ctx) {
         return Err("Not authorized: admin only".to_string());
     }
+    ctx.db.item_def().id().find(&item_def_id)
+        .ok_or_else(|| format!("ItemDefinition {} not found", item_def_id))?;
     ctx.db.item_def().id().delete(&item_def_id);
     Ok(())
 }
