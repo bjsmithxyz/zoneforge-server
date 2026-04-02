@@ -48,6 +48,29 @@ pub struct ItemDefinition {
     pub value:        u32,
 }
 
+/// One row per stack of items a player holds.
+#[table(accessor = inventory, public)]
+pub struct Inventory {
+    #[primary_key]
+    #[auto_inc]
+    pub id:          u64,
+    #[index(btree)]
+    pub player_id:   u64,
+    pub item_def_id: u64,
+    pub quantity:    u32,
+}
+
+/// One row per player — tracks equipped items (one per equipment slot).
+/// Row is created automatically when a player equips their first item.
+#[table(accessor = equipment, public)]
+pub struct Equipment {
+    #[primary_key]
+    pub player_id:    u64,
+    pub weapon_id:    Option<u64>,
+    pub armor_id:     Option<u64>,
+    pub accessory_id: Option<u64>,
+}
+
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub enum AiState {
     Idle,
@@ -1535,6 +1558,53 @@ pub fn enter_zone(ctx: &ReducerContext) -> Result<(), String> {
     Err("No portal within range".to_string())
 }
 
+/// Internal helper: add `quantity` of `item_def_id` to `player_id`'s inventory.
+/// Stacks into an existing row if one exists, otherwise inserts a new row.
+fn add_to_inventory(ctx: &ReducerContext, player_id: u64, item_def_id: u64, quantity: u32) {
+    if let Some(existing) = ctx.db.inventory()
+        .player_id()
+        .filter(&player_id)
+        .find(|row| row.item_def_id == item_def_id)
+    {
+        ctx.db.inventory().id().update(Inventory {
+            quantity: existing.quantity + quantity,
+            ..existing
+        });
+    } else {
+        ctx.db.inventory().insert(Inventory {
+            id: 0,
+            player_id,
+            item_def_id,
+            quantity,
+        });
+    }
+}
+
+/// Internal helper: remove `quantity` of `item_def_id` from `player_id`'s inventory.
+/// Returns true if successful. Deletes the row if quantity reaches 0.
+fn remove_from_inventory(ctx: &ReducerContext, player_id: u64, item_def_id: u64, quantity: u32) -> bool {
+    if let Some(row) = ctx.db.inventory()
+        .player_id()
+        .filter(&player_id)
+        .find(|r| r.item_def_id == item_def_id)
+    {
+        if row.quantity < quantity {
+            return false;
+        }
+        if row.quantity == quantity {
+            ctx.db.inventory().id().delete(&row.id);
+        } else {
+            ctx.db.inventory().id().update(Inventory {
+                quantity: row.quantity - quantity,
+                ..row
+            });
+        }
+        true
+    } else {
+        false
+    }
+}
+
 /// Admin: create an item definition (shared template visible to all clients).
 #[reducer]
 pub fn create_item_def(
@@ -1579,5 +1649,107 @@ pub fn delete_item_def(ctx: &ReducerContext, item_def_id: u64) -> Result<(), Str
     ctx.db.item_def().id().find(&item_def_id)
         .ok_or_else(|| format!("ItemDefinition {} not found", item_def_id))?;
     ctx.db.item_def().id().delete(&item_def_id);
+    Ok(())
+}
+
+/// Admin: give an item directly to a player's inventory.
+#[reducer]
+pub fn give_item(
+    ctx: &ReducerContext,
+    player_id: u64,
+    item_def_id: u64,
+    quantity: u32,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("Not authorized: admin only".to_string());
+    }
+    ctx.db.player().id().find(&player_id)
+        .ok_or("Player not found")?;
+    ctx.db.item_def().id().find(&item_def_id)
+        .ok_or("ItemDefinition not found")?;
+    if quantity == 0 {
+        return Err("quantity must be > 0".to_string());
+    }
+    add_to_inventory(ctx, player_id, item_def_id, quantity);
+    Ok(())
+}
+
+/// Player: equip an item from inventory. Swaps back any previously equipped item.
+#[reducer]
+pub fn equip_item(ctx: &ReducerContext, item_def_id: u64) -> Result<(), String> {
+    let player = ctx.db.player().identity().find(ctx.sender())
+        .ok_or("Player not found")?;
+    let def = ctx.db.item_def().id().find(&item_def_id)
+        .ok_or("ItemDefinition not found")?;
+
+    // Must have it in inventory
+    if !remove_from_inventory(ctx, player.id, item_def_id, 1) {
+        return Err("Item not in inventory".to_string());
+    }
+
+    // Save existence check before eq is moved into a struct spread
+    let equipment_exists = ctx.db.equipment().player_id().find(&player.id).is_some();
+
+    // Get or create equipment row
+    let eq = ctx.db.equipment().player_id().find(&player.id)
+        .unwrap_or(Equipment {
+            player_id:    player.id,
+            weapon_id:    None,
+            armor_id:     None,
+            accessory_id: None,
+        });
+
+    // Determine which slot to use
+    let (old_id, new_eq) = match def.item_type {
+        ItemType::Weapon    => (eq.weapon_id,    Equipment { weapon_id:    Some(item_def_id), ..eq }),
+        ItemType::Armor     => (eq.armor_id,     Equipment { armor_id:     Some(item_def_id), ..eq }),
+        ItemType::Accessory => (eq.accessory_id, Equipment { accessory_id: Some(item_def_id), ..eq }),
+        ItemType::Consumable => {
+            // Put item back — consumables aren't equipped
+            add_to_inventory(ctx, player.id, item_def_id, 1);
+            return Err("Consumables cannot be equipped".to_string());
+        }
+    };
+
+    // Swap: return the previously equipped item to inventory
+    if let Some(prev_id) = old_id {
+        add_to_inventory(ctx, player.id, prev_id, 1);
+    }
+
+    if equipment_exists {
+        ctx.db.equipment().player_id().update(new_eq);
+    } else {
+        ctx.db.equipment().insert(new_eq);
+    }
+    Ok(())
+}
+
+/// Player: unequip an item by slot name ("weapon", "armor", "accessory").
+/// Returns it to inventory.
+#[reducer]
+pub fn unequip_item(ctx: &ReducerContext, slot: String) -> Result<(), String> {
+    let player = ctx.db.player().identity().find(ctx.sender())
+        .ok_or("Player not found")?;
+    let eq = ctx.db.equipment().player_id().find(&player.id)
+        .ok_or("No equipment row found")?;
+
+    let (item_id, new_eq) = match slot.as_str() {
+        "weapon" => (
+            eq.weapon_id.ok_or("Weapon slot is empty")?,
+            Equipment { weapon_id: None, ..eq },
+        ),
+        "armor" => (
+            eq.armor_id.ok_or("Armor slot is empty")?,
+            Equipment { armor_id: None, ..eq },
+        ),
+        "accessory" => (
+            eq.accessory_id.ok_or("Accessory slot is empty")?,
+            Equipment { accessory_id: None, ..eq },
+        ),
+        _ => return Err(format!("Unknown slot '{}'. Use weapon/armor/accessory", slot)),
+    };
+
+    add_to_inventory(ctx, player.id, item_id, 1);
+    ctx.db.equipment().player_id().update(new_eq);
     Ok(())
 }
