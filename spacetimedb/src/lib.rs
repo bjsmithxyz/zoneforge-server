@@ -1566,8 +1566,9 @@ fn add_to_inventory(ctx: &ReducerContext, player_id: u64, item_def_id: u64, quan
         .filter(&player_id)
         .find(|row| row.item_def_id == item_def_id)
     {
+        let new_qty = existing.quantity.saturating_add(quantity);
         ctx.db.inventory().id().update(Inventory {
-            quantity: existing.quantity + quantity,
+            quantity: new_qty,
             ..existing
         });
     } else {
@@ -1583,6 +1584,9 @@ fn add_to_inventory(ctx: &ReducerContext, player_id: u64, item_def_id: u64, quan
 /// Internal helper: remove `quantity` of `item_def_id` from `player_id`'s inventory.
 /// Returns true if successful. Deletes the row if quantity reaches 0.
 fn remove_from_inventory(ctx: &ReducerContext, player_id: u64, item_def_id: u64, quantity: u32) -> bool {
+    if quantity == 0 {
+        return false;
+    }
     if let Some(row) = ctx.db.inventory()
         .player_id()
         .filter(&player_id)
@@ -1664,9 +1668,9 @@ pub fn give_item(
         return Err("Not authorized: admin only".to_string());
     }
     ctx.db.player().id().find(&player_id)
-        .ok_or("Player not found")?;
+        .ok_or_else(|| "Player not found".to_string())?;
     ctx.db.item_def().id().find(&item_def_id)
-        .ok_or("ItemDefinition not found")?;
+        .ok_or_else(|| "ItemDefinition not found".to_string())?;
     if quantity == 0 {
         return Err("quantity must be > 0".to_string());
     }
@@ -1678,19 +1682,27 @@ pub fn give_item(
 #[reducer]
 pub fn equip_item(ctx: &ReducerContext, item_def_id: u64) -> Result<(), String> {
     let player = ctx.db.player().identity().find(ctx.sender())
-        .ok_or("Player not found")?;
+        .ok_or_else(|| "Player not found".to_string())?;
+    if player.is_dead {
+        return Err("Cannot equip items while dead".to_string());
+    }
     let def = ctx.db.item_def().id().find(&item_def_id)
-        .ok_or("ItemDefinition not found")?;
+        .ok_or_else(|| "ItemDefinition not found".to_string())?;
+
+    // Validate type BEFORE touching inventory
+    if def.item_type == ItemType::Consumable {
+        return Err("Consumables cannot be equipped".to_string());
+    }
 
     // Must have it in inventory
     if !remove_from_inventory(ctx, player.id, item_def_id, 1) {
         return Err("Item not in inventory".to_string());
     }
 
-    // Save existence check before eq is moved into a struct spread
+    // Get equipment row existence BEFORE any moves
     let equipment_exists = ctx.db.equipment().player_id().find(&player.id).is_some();
 
-    // Get or create equipment row
+    // Get or create equipment row (second lookup is intentional — existence check was separate)
     let eq = ctx.db.equipment().player_id().find(&player.id)
         .unwrap_or(Equipment {
             player_id:    player.id,
@@ -1699,19 +1711,15 @@ pub fn equip_item(ctx: &ReducerContext, item_def_id: u64) -> Result<(), String> 
             accessory_id: None,
         });
 
-    // Determine which slot to use
+    // Determine which slot to use (no Consumable arm needed — guarded above)
     let (old_id, new_eq) = match def.item_type {
         ItemType::Weapon    => (eq.weapon_id,    Equipment { weapon_id:    Some(item_def_id), ..eq }),
         ItemType::Armor     => (eq.armor_id,     Equipment { armor_id:     Some(item_def_id), ..eq }),
         ItemType::Accessory => (eq.accessory_id, Equipment { accessory_id: Some(item_def_id), ..eq }),
-        ItemType::Consumable => {
-            // Put item back — consumables aren't equipped
-            add_to_inventory(ctx, player.id, item_def_id, 1);
-            return Err("Consumables cannot be equipped".to_string());
-        }
+        ItemType::Consumable => unreachable!("guarded above"),
     };
 
-    // Swap: return the previously equipped item to inventory
+    // Swap: return previously equipped item to inventory
     if let Some(prev_id) = old_id {
         add_to_inventory(ctx, player.id, prev_id, 1);
     }
@@ -1729,21 +1737,24 @@ pub fn equip_item(ctx: &ReducerContext, item_def_id: u64) -> Result<(), String> 
 #[reducer]
 pub fn unequip_item(ctx: &ReducerContext, slot: String) -> Result<(), String> {
     let player = ctx.db.player().identity().find(ctx.sender())
-        .ok_or("Player not found")?;
+        .ok_or_else(|| "Player not found".to_string())?;
+    if player.is_dead {
+        return Err("Cannot unequip items while dead".to_string());
+    }
     let eq = ctx.db.equipment().player_id().find(&player.id)
-        .ok_or("No equipment row found")?;
+        .ok_or_else(|| "No equipment row found".to_string())?;
 
     let (item_id, new_eq) = match slot.as_str() {
         "weapon" => (
-            eq.weapon_id.ok_or("Weapon slot is empty")?,
+            eq.weapon_id.ok_or_else(|| "Weapon slot is empty".to_string())?,
             Equipment { weapon_id: None, ..eq },
         ),
         "armor" => (
-            eq.armor_id.ok_or("Armor slot is empty")?,
+            eq.armor_id.ok_or_else(|| "Armor slot is empty".to_string())?,
             Equipment { armor_id: None, ..eq },
         ),
         "accessory" => (
-            eq.accessory_id.ok_or("Accessory slot is empty")?,
+            eq.accessory_id.ok_or_else(|| "Accessory slot is empty".to_string())?,
             Equipment { accessory_id: None, ..eq },
         ),
         _ => return Err(format!("Unknown slot '{}'. Use weapon/armor/accessory", slot)),
