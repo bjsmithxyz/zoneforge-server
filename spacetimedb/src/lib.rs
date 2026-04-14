@@ -171,6 +171,24 @@ fn is_admin(ctx: &ReducerContext) -> bool {
     ctx.db.admin().identity().find(ctx.sender()).is_some()
 }
 
+#[derive(SpacetimeType, Clone, Copy, Debug, PartialEq)]
+pub enum WeatherKind {
+    Clear,
+    Rain,
+    Storm,
+    Fog,
+    Snow,
+}
+
+#[table(accessor = weather_state, public)]
+pub struct WeatherState {
+    #[primary_key]
+    pub zone_id: u64,
+    pub kind: WeatherKind,
+    pub intensity: f32,
+    pub started_at: Timestamp,
+}
+
 // Define a Zone table
 #[table(accessor = zone, public)]
 pub struct Zone {
