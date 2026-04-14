@@ -283,6 +283,22 @@ pub struct ManaRegenTick {
     pub scheduled_at: ScheduleAt,
 }
 
+#[table(accessor = world_clock, public)]
+pub struct WorldClock {
+    #[primary_key]
+    pub id: u8,
+    pub minutes_of_day: u16,
+    pub last_tick: Timestamp,
+}
+
+#[table(accessor = world_clock_tick, scheduled(tick_world_time))]
+pub struct WorldClockTick {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
 // Defines an enemy archetype — shared stats referenced by all instances.
 // Accessor matches autogen name "enemy_def".
 #[table(accessor = enemy_def, public)]
@@ -423,6 +439,26 @@ pub fn tick_mana_regen(ctx: &ReducerContext, _tick: ManaRegenTick) {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Time(
             ctx.timestamp + std::time::Duration::from_secs(2)
+        ),
+    });
+}
+
+#[reducer]
+pub fn tick_world_time(ctx: &ReducerContext, _tick: WorldClockTick) {
+    let clock = ctx.db.world_clock().id().find(0u8);
+    if let Some(existing) = clock {
+        let next = (existing.minutes_of_day + 1) % 1440;
+        ctx.db.world_clock().id().update(WorldClock {
+            minutes_of_day: next,
+            last_tick: ctx.timestamp,
+            ..existing
+        });
+    }
+    // Re-schedule
+    ctx.db.world_clock_tick().insert(WorldClockTick {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(
+            ctx.timestamp + std::time::Duration::from_secs(1)
         ),
     });
 }
