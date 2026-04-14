@@ -199,6 +199,7 @@ pub struct Zone {
     pub terrain_width:  u32,
     pub terrain_height: u32,
     pub water_level:    f32,
+    pub mood_preset_id: u32,
 }
 
 // Define a TerrainChunk table — stores height and splat data for 32×32 terrain sections
@@ -1015,6 +1016,7 @@ pub fn create_zone(
         terrain_width,
         terrain_height,
         water_level,
+        mood_preset_id: 0,
     };
     let zone_row = ctx.db.zone().insert(zone);
     let zone_id = zone_row.id;
