@@ -148,6 +148,7 @@ pub struct Admin {
 const ADMIN_IDENTITIES: &[&str] = &[
     "0xc2007b97a0605a88c5ce60d229b1067a1bfeb27a37cf6371b5830c6b404932da",
     "0xc200496650f3c734cb567002e110e78f6876c4b17ca9512aed8927dd412a104b",
+    "0xc200aa92d6daccb0a2bd52f1da120326f9ce92bab87abfe95e99e58e767de4d8",
 ];
 const _: () = assert!(!ADMIN_IDENTITIES.is_empty(), "ADMIN_IDENTITIES must contain at least one entry");
 
@@ -410,6 +411,17 @@ pub fn tick_mana_regen(ctx: &ReducerContext, _tick: ManaRegenTick) {
 /// Ensures all self-scheduling ticks are running after a hot-publish (init only runs on fresh databases).
 #[reducer(client_connected)]
 pub fn client_connected(ctx: &ReducerContext) {
+    // Auto-promote compile-time admin identities (survives --delete-data)
+    if ctx.db.admin().identity().find(ctx.sender()).is_none() {
+        for &hex in ADMIN_IDENTITIES {
+            if identity_from_hex(hex) == ctx.sender() {
+                ctx.db.admin().insert(Admin { identity: ctx.sender() });
+                log::info!("client_connected: auto-promoted admin {:?}", ctx.sender());
+                break;
+            }
+        }
+    }
+
     if ctx.db.status_effect_tick().iter().next().is_none() {
         ctx.db.status_effect_tick().insert(StatusEffectTick {
             scheduled_id: 0,
