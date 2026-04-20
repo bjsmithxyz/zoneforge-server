@@ -1092,6 +1092,37 @@ pub fn create_zone(
     log::info!("Zone '{}' created with {}×{} chunks", name, chunks_x, chunks_z);
 }
 
+#[reducer]
+pub fn change_weather(
+    ctx: &ReducerContext,
+    zone_id: u64,
+    kind: WeatherKind,
+    intensity: f32,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("not admin".to_string());
+    }
+    if !(0.0..=1.0).contains(&intensity) {
+        return Err("intensity must be 0.0..=1.0".to_string());
+    }
+    if let Some(existing) = ctx.db.weather_state().zone_id().find(zone_id) {
+        ctx.db.weather_state().zone_id().update(WeatherState {
+            kind,
+            intensity,
+            started_at: ctx.timestamp,
+            ..existing
+        });
+    } else {
+        ctx.db.weather_state().insert(WeatherState {
+            zone_id,
+            kind,
+            intensity,
+            started_at: ctx.timestamp,
+        });
+    }
+    Ok(())
+}
+
 // Reducer to update terrain chunk height and splat data
 #[reducer]
 pub fn update_terrain_chunk(
