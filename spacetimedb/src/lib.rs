@@ -1077,6 +1077,14 @@ pub fn create_zone(
     let zone_row = ctx.db.zone().insert(zone);
     let zone_id = zone_row.id;
 
+    // Default weather: clear skies
+    ctx.db.weather_state().insert(WeatherState {
+        zone_id,
+        kind: WeatherKind::Clear,
+        intensity: 0.0,
+        started_at: ctx.timestamp,
+    });
+
     // Initialise flat terrain chunks (height = water_level + 0.5, full Grass).
     let chunks_x = terrain_width.div_ceil(CHUNK_SIZE);
     let chunks_z = terrain_height.div_ceil(CHUNK_SIZE);
