@@ -749,6 +749,26 @@ pub fn init(ctx: &ReducerContext) {
         });
         log::info!("init: scheduled AI tick");
     }
+
+    // WorldClock bootstrap
+    if ctx.db.world_clock().id().find(0u8).is_none() {
+        ctx.db.world_clock().insert(WorldClock {
+            id: 0,
+            minutes_of_day: 480, // 08:00
+            last_tick: ctx.timestamp,
+        });
+        log::info!("init: bootstrapped WorldClock");
+    }
+    // Start the world-time tick
+    if ctx.db.world_clock_tick().iter().next().is_none() {
+        ctx.db.world_clock_tick().insert(WorldClockTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_secs(1)
+            ),
+        });
+        log::info!("init: scheduled world time tick");
+    }
 }
 
 fn apply_damage(
