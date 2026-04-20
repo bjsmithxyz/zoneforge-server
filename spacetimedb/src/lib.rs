@@ -1123,6 +1123,21 @@ pub fn change_weather(
     Ok(())
 }
 
+#[reducer]
+pub fn set_zone_mood(
+    ctx: &ReducerContext,
+    zone_id: u64,
+    mood_preset_id: u32,
+) -> Result<(), String> {
+    if !is_admin(ctx) {
+        return Err("not admin".to_string());
+    }
+    let zone = ctx.db.zone().id().find(zone_id)
+        .ok_or_else(|| format!("Zone {} not found", zone_id))?;
+    ctx.db.zone().id().update(Zone { mood_preset_id, ..zone });
+    Ok(())
+}
+
 // Reducer to update terrain chunk height and splat data
 #[reducer]
 pub fn update_terrain_chunk(
