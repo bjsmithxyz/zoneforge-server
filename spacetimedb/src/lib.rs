@@ -13,7 +13,8 @@ pub use portal::Portal;
 pub use inventory::{ItemDefinition, Inventory, Equipment, ItemType, Rarity};
 pub use loot::{LootTable, ItemDrop};
 pub use combat::{Ability, PlayerCooldown, StatusEffect, CombatLog,
-                 StatusEffectTick, ManaRegenTick, AbilityType, StatusEffectType};
+                 StatusEffectTick, ManaRegenTick, CombatLogPruneTick,
+                 AbilityType, StatusEffectType};
 pub use enemy::{EnemyDefinition, SpawnPoint, Enemy, EnemyRespawnTick, AiTick,
                 AiState, EnemyType};
 // Bring accessor traits into scope so ctx.db.<table>() works for moved tables.
@@ -22,7 +23,7 @@ use atmosphere::{weather_state as _, world_clock as _, world_clock_tick as _};
 use terrain::terrain_chunk as _;
 use portal::portal as _;
 use loot::item_drop as _;
-use combat::{ability as _, status_effect_tick as _, mana_regen_tick as _};
+use combat::{ability as _, status_effect_tick as _, mana_regen_tick as _, combat_log_prune_tick as _};
 use enemy::{spawn_point as _, enemy as _, enemy_respawn_tick as _, ai_tick as _};
 
 // Define a simple Player table.
@@ -138,6 +139,15 @@ pub fn client_connected(ctx: &ReducerContext) {
         });
         log::info!("client_connected: bootstrapped AI tick");
     }
+    if ctx.db.combat_log_prune_tick().iter().next().is_none() {
+        ctx.db.combat_log_prune_tick().insert(CombatLogPruneTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_secs(60)
+            ),
+        });
+        log::info!("client_connected: bootstrapped combat_log prune tick");
+    }
 }
 
 pub(crate) fn dist_sq(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
@@ -228,6 +238,17 @@ pub fn init(ctx: &ReducerContext) {
             ),
         });
         log::info!("init: scheduled AI tick");
+    }
+
+    // Start the combat_log prune tick (caps row count to keep client subs bounded)
+    if ctx.db.combat_log_prune_tick().iter().next().is_none() {
+        ctx.db.combat_log_prune_tick().insert(CombatLogPruneTick {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(
+                ctx.timestamp + std::time::Duration::from_secs(60)
+            ),
+        });
+        log::info!("init: scheduled combat_log prune tick");
     }
 
     // WorldClock bootstrap

@@ -85,6 +85,14 @@ pub struct ManaRegenTick {
     pub scheduled_at: ScheduleAt,
 }
 
+#[table(accessor = combat_log_prune_tick, scheduled(prune_combat_log))]
+pub struct CombatLogPruneTick {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
 #[reducer]
 pub fn tick_status_effects(ctx: &ReducerContext, _tick: StatusEffectTick) {
     let now_us = ctx.timestamp
@@ -111,6 +119,28 @@ pub fn tick_status_effects(ctx: &ReducerContext, _tick: StatusEffectTick) {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Time(
             ctx.timestamp + std::time::Duration::from_secs(1)
+        ),
+    });
+}
+
+/// Caps `combat_log` at the latest `KEEP` rows. Without this, every damage tick
+/// adds a row forever — bandwidth + memory grow unbounded since clients subscribe
+/// to the full table. Runs every 60s.
+#[reducer]
+pub fn prune_combat_log(ctx: &ReducerContext, _tick: CombatLogPruneTick) {
+    const KEEP: usize = 1000;
+    let mut ids: Vec<u64> = ctx.db.combat_log().iter().map(|l| l.id).collect();
+    if ids.len() > KEEP {
+        ids.sort_unstable();
+        let to_delete = ids.len() - KEEP;
+        for id in ids.into_iter().take(to_delete) {
+            ctx.db.combat_log().id().delete(&id);
+        }
+    }
+    ctx.db.combat_log_prune_tick().insert(CombatLogPruneTick {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(
+            ctx.timestamp + std::time::Duration::from_secs(60)
         ),
     });
 }
